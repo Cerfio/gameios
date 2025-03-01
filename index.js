@@ -2,6 +2,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const db = require("./models");
 const { Op } = require("sequelize");
+const axios = require("axios");
 
 const app = express();
 
@@ -109,6 +110,90 @@ app.post("/api/games/search", (req, res) => {
     });
 
   return gamesFound;
+});
+
+app.post("/api/games/populate", async (req, res) => {
+  try {
+    const androidUrl =
+      "https://interview-marketing-eng-dev.s3.eu-west-1.amazonaws.com/android.top100.json";
+    const iosUrl =
+      "https://interview-marketing-eng-dev.s3.eu-west-1.amazonaws.com/ios.top100.json";
+
+    const [androidResponse, iosResponse] = await Promise.all([
+      axios.get(androidUrl),
+      axios.get(iosUrl),
+    ]);
+
+    const androidData = androidResponse.data;
+    const iosData = iosResponse.data;
+
+    // Deduplicate games before insertion
+    const uniqueGames = {};
+    
+    // Process Android games
+    for (const appGroup of androidData) {
+      if (Array.isArray(appGroup)) {
+        for (const app of appGroup) {
+          if (app && app.name) {
+            const key = `android-${app.app_id}`;
+            if (!uniqueGames[key]) {
+              uniqueGames[key] = {
+                name: app.name,
+                publisherId: app.publisher_id || null,
+                platform: "android",
+                storeId: app.app_id || null,
+                bundleId: app.bundle_id || null,
+                appVersion: app.version || null,
+                isPublished: true,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+            }
+          }
+        }
+      }
+    }
+    
+    // Process iOS games
+    for (const appGroup of iosData) {
+      if (Array.isArray(appGroup)) {
+        for (const app of appGroup) {
+          if (app && app.name) {
+            const key = `ios-${app.app_id}`;
+            if (!uniqueGames[key]) {
+              uniqueGames[key] = {
+                name: app.name,
+                publisherId: app.publisher_id || null,
+                platform: "ios",
+                storeId: app.app_id || null,
+                bundleId: app.bundle_id || null,
+                appVersion: app.version || null,
+                isPublished: true,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+            }
+          }
+        }
+      }
+    }
+    
+    const allGames = Object.values(uniqueGames);
+    
+    console.log(
+      `Processed ${Object.values(uniqueGames).filter(g => g.platform === 'android').length} Android games and ${Object.values(uniqueGames).filter(g => g.platform === 'ios').length} iOS games`
+    );
+    
+    // Use updateOnDuplicate to update existing records
+    await db.Game.bulkCreate(allGames, {
+      updateOnDuplicate: ['name', 'publisherId', 'bundleId', 'appVersion', 'isPublished', 'updatedAt']
+    });
+    
+    res.send({ success: true, count: allGames.length });
+  } catch (error) {
+    console.error("Error populating games:", error);
+    res.status(500).send({ error: error.message });
+  }
 });
 
 app.listen(3000, () => {
